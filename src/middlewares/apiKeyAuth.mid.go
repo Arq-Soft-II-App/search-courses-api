@@ -10,7 +10,7 @@ import (
 )
 
 func APIKeyAuthMiddleware(logger *zap.Logger) gin.HandlerFunc {
-	KEY := envs.LoadEnvs(".env").Get("INSCRIPTION_API_KEY")
+	KEY := envs.LoadEnvs(".env").Get("SEARCH_API_KEY")
 	return func(c *gin.Context) {
 		apiKey := c.GetHeader("Authorization")
 
