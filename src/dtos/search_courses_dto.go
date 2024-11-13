@@ -1,7 +1,7 @@
 package dtos
 
 type SearchCourseDto struct {
-	CourseId          string  `json:"_id"`
+	CourseId          string  `json:"id"`
 	CourseName        string  `json:"course_name"`
 	CourseDescription string  `json:"description"`
 	CoursePrice       float64 `json:"price"`

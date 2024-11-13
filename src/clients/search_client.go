@@ -2,6 +2,7 @@ package clients
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -86,11 +87,24 @@ func (s *SolrClient) AddCourse(course *models.SearchCourseModel) error {
 }
 
 func (s *SolrClient) SearchCourses(query string) ([]models.SearchCourseModel, error) {
+
 	solrQuery := solr.NewQuery()
-	if query != "" {
-		escapedQuery := strings.Replace(query, ":", "\\:", -1)
-		escapedQuery = strings.Replace(escapedQuery, " ", "\\ ", -1)
-		solrQuery.Q(fmt.Sprintf("course_name:*%s* OR description:*%s* OR category_name:*%s*", escapedQuery, escapedQuery, escapedQuery))
+
+	decodedQuery, err := url.QueryUnescape(query)
+	if err != nil {
+		s.logger.Error("Error decodificando query", zap.Error(err))
+		return nil, err
+	}
+
+	if decodedQuery != "" {
+		escapedQuery := strings.Replace(decodedQuery, ":", "\\:", -1)
+		queryStr := fmt.Sprintf(`course_name:"%s" OR description:"%s" OR category_name:"%s"`,
+			escapedQuery, escapedQuery, escapedQuery)
+		solrQuery.Q(queryStr)
+
+		s.logger.Info("Query procesada",
+			zap.String("query_original", decodedQuery),
+			zap.String("query_solr", queryStr))
 	} else {
 		solrQuery.Q("*:*")
 	}
