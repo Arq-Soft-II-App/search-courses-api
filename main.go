@@ -13,16 +13,17 @@ func main() {
 	searchService := app.GetSearchService()
 
 	// Iniciar el consumo de mensajes de RabbitMQ
-	go func() {
-		rabbitMQ := app.GetRabbitMQ()
-		rabbitMQ.ConsumeMessages(func(message string) {
-			// Procesar cada mensaje (ID de curso)
-			err := searchService.UpdateCourseInSolr(message)
-			if err != nil {
-				logger.Error("Error al actualizar el curso en Solr", zap.Error(err))
-			}
-		})
-	}()
+	rabbitMQ := app.GetRabbitMQ()
+	rabbitMQ.ConsumeMessages(func(message string) {
+		// Procesar cada mensaje (ID de curso)
+		err := searchService.UpdateCourseInSolr(message)
+		if err != nil {
+			logger.Error("Error al actualizar el curso en Solr", zap.Error(err))
+		}
+	})
+
+	// Esperar a que la conexión con Solr esté lista
+	app.GetSolrClient().WaitForConnection()
 
 	// Cargar todos los cursos en Solr al iniciar la aplicación
 	err := searchService.LoadAllCoursesIntoSolr()

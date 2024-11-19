@@ -3,7 +3,7 @@ package builder
 import (
 	"search-courses-api/src/clients"
 	"search-courses-api/src/config/envs"
-	"search-courses-api/src/config/rabbitmq"
+	"search-courses-api/src/config/rabbitMQ"
 	"search-courses-api/src/controllers"
 	"search-courses-api/src/middlewares"
 	"search-courses-api/src/routes"
@@ -15,7 +15,7 @@ import (
 
 type AppBuilder struct {
 	envs          envs.Envs
-	rabbitMQ      *rabbitmq.RabbitMQ
+	rabbitMQ      *rabbitMQ.RabbitMQ
 	solrClient    *clients.SolrClient
 	searchService *services.SearchService
 	searchCtrl    *controllers.SearchController
@@ -41,15 +41,11 @@ func (b *AppBuilder) BuildLogger() {
 }
 
 func (b *AppBuilder) BuildRabbitMQ() {
-	b.rabbitMQ = rabbitmq.NewRabbitMQ()
+	b.rabbitMQ = rabbitMQ.NewRabbitMQ()
 }
 
 func (b *AppBuilder) BuildSolrClient() {
-	var err error
-	b.solrClient, err = clients.NewSolrClient(b.logger)
-	if err != nil {
-		b.logger.Fatal("Error al conectar con Solr", zap.Error(err))
-	}
+	b.solrClient = clients.NewSolrClient(b.logger)
 }
 
 func (b *AppBuilder) BuildServices() {
@@ -62,7 +58,7 @@ func (b *AppBuilder) BuildServices() {
 }
 
 func (b *AppBuilder) BuildControllers() {
-	b.searchCtrl = controllers.NewSearchController(b.searchService)
+	b.searchCtrl = controllers.NewSearchController(b.searchService, b.logger)
 }
 
 func (b *AppBuilder) BuildRouter() {
@@ -76,12 +72,16 @@ func (b *AppBuilder) BuildRouter() {
 	routes.SetupRoutes(b.router, b.searchCtrl)
 }
 
-func (b *AppBuilder) GetRabbitMQ() *rabbitmq.RabbitMQ {
+func (b *AppBuilder) GetRabbitMQ() *rabbitMQ.RabbitMQ {
 	return b.rabbitMQ
 }
 
 func (b *AppBuilder) GetSearchService() *services.SearchService {
 	return b.searchService
+}
+
+func (b *AppBuilder) GetSolrClient() *clients.SolrClient {
+	return b.solrClient
 }
 
 func (b *AppBuilder) GetLogger() *zap.Logger {

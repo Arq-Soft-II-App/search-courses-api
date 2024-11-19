@@ -26,25 +26,41 @@ func NewSearchService(solrClient *clients.SolrClient, logger *zap.Logger, course
 }
 
 func (s *SearchService) UpdateCourseInSolr(courseID string) error {
-	// Obtener datos del curso desde courses-api
+	s.logger.Info("[SEARCH-API] Iniciando actualización de curso en Solr",
+		zap.String("course_id", courseID))
+
+	if !s.solrClient.IsConnected() {
+		return fmt.Errorf("Conexión a Solr no establecida")
+	}
+
 	courseData, err := s.getCourseByID(courseID)
 	if err != nil {
-		s.logger.Error("Error al obtener datos del curso", zap.String("courseID", courseID), zap.Error(err))
+		s.logger.Error("[SEARCH-API] Error al obtener datos del curso",
+			zap.String("course_id", courseID),
+			zap.Error(err))
 		return err
 	}
 
-	// Actualizar Solr con los datos del curso
+	s.logger.Debug("[SEARCH-API] Datos del curso obtenidos correctamente",
+		zap.String("course_id", courseID),
+		zap.String("course_name", courseData.CourseName))
+
 	err = s.solrClient.AddCourse(courseData)
 	if err != nil {
-		s.logger.Error("Error al actualizar Solr", zap.String("courseID", courseID), zap.Error(err))
+		s.logger.Error("Error al actualizar curso en Solr",
+			zap.String("course_id", courseID),
+			zap.Error(err))
 		return err
 	}
 
-	s.logger.Info("Datos del curso actualizados en Solr", zap.String("courseID", courseID))
+	s.logger.Info("Curso actualizado exitosamente en Solr",
+		zap.String("course_id", courseID))
 	return nil
 }
 
 func (s *SearchService) LoadAllCoursesIntoSolr() error {
+	s.logger.Info("Cargando todos los cursos en Solr")
+
 	courses, err := s.getAllCourses()
 	if err != nil {
 		s.logger.Error("Error al obtener todos los cursos", zap.Error(err))
@@ -82,8 +98,6 @@ func (s *SearchService) getCourseByID(courseID string) (*models.SearchCourseMode
 		return nil, err
 	}
 
-	fmt.Println("course: ", course)
-
 	return &course, nil
 }
 
@@ -109,16 +123,27 @@ func (s *SearchService) getAllCourses() ([]models.SearchCourseModel, error) {
 		return nil, fmt.Errorf("error al deserializar la respuesta JSON: %v", err)
 	}
 
-	fmt.Println("courses en getAllCourses: ", courses)
-
 	return courses, nil
 }
 
 func (s *SearchService) SearchCourses(query string) ([]models.SearchCourseModel, error) {
+	if !s.solrClient.IsConnected() {
+		return nil, fmt.Errorf("Servicio de búsqueda no disponible temporalmente")
+	}
+
+	s.logger.Info("Iniciando búsqueda de cursos",
+		zap.String("query", query))
+
 	courses, err := s.solrClient.SearchCourses(query)
 	if err != nil {
-		s.logger.Error("Error al buscar cursos en Solr", zap.Error(err))
+		s.logger.Error("Error al buscar cursos",
+			zap.String("query", query),
+			zap.Error(err))
 		return nil, err
 	}
+
+	s.logger.Info("Búsqueda completada exitosamente",
+		zap.String("query", query),
+		zap.Int("resultados", len(courses)))
 	return courses, nil
 }

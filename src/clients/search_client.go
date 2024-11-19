@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"search-courses-api/src/config/envs"
 	"search-courses-api/src/models"
@@ -16,41 +17,74 @@ import (
 type SolrClient struct {
 	connection *solr.SolrInterface
 	logger     *zap.Logger
+	mu         sync.RWMutex
+	connected  bool
+	connCond   *sync.Cond
 }
 
-var (
-	solrClientInstance *SolrClient
-	solrOnce           sync.Once
-)
+func NewSolrClient(logger *zap.Logger) *SolrClient {
+	client := &SolrClient{
+		logger: logger,
+	}
+	client.connCond = sync.NewCond(&client.mu)
+	go client.connectWithRetry()
+	return client
+}
 
-func NewSolrClient(logger *zap.Logger) (*SolrClient, error) {
-	var err error
-	solrOnce.Do(func() {
-		envs := envs.LoadEnvs(".env")
-		solrHost := envs.Get("SOLR_HOST")
-		solrPort := envs.Get("SOLR_PORT")
-		solrCore := envs.Get("SOLR_CORE")
+func (s *SolrClient) connectWithRetry() {
+	envs := envs.LoadEnvs(".env")
+	solrHost := envs.Get("SOLR_HOST")
+	solrPort := envs.Get("SOLR_PORT")
+	solrCore := envs.Get("SOLR_CORE")
 
-		solrBaseURL := fmt.Sprintf("http://%s:%s/solr", solrHost, solrPort)
+	solrBaseURL := fmt.Sprintf("http://%s:%s/solr", solrHost, solrPort)
 
+	for {
 		solrInterface, err := solr.NewSolrInterface(solrBaseURL, solrCore)
 		if err != nil {
-			logger.Error("[SEARCH-API] Error al conectar con Solr", zap.Error(err))
-			return
+			s.logger.Error("[SEARCH-API] Error al conectar con Solr", zap.Error(err))
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
-		solrClientInstance = &SolrClient{
-			connection: solrInterface,
-			logger:     logger,
-		}
+		s.mu.Lock()
+		s.connection = solrInterface
+		s.connected = true
+		s.mu.Unlock()
 
-		logger.Info("[SEARCH-API] Conexión a Solr establecida", zap.String("url", solrBaseURL))
-	})
+		s.logger.Info("[SEARCH-API] Conexión a Solr establecida", zap.String("url", solrBaseURL))
 
-	return solrClientInstance, err
+		// Notificar a quienes estén esperando que la conexión está lista
+		s.connCond.Broadcast()
+
+		break
+	}
+}
+
+func (s *SolrClient) WaitForConnection() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for !s.connected {
+		s.connCond.Wait()
+	}
+}
+
+func (s *SolrClient) IsConnected() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.connected
 }
 
 func (s *SolrClient) AddCourse(course *models.SearchCourseModel) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.connected {
+		return fmt.Errorf("Conexión a Solr no establecida")
+	}
+
+	s.logger.Info("Agregando curso a Solr",
+		zap.String("course_id", course.ID.Hex()),
+		zap.String("course_name", course.CourseName))
 
 	doc := solr.Document{
 		"id":            course.ID.Hex(),
@@ -71,9 +105,14 @@ func (s *SolrClient) AddCourse(course *models.SearchCourseModel) error {
 
 	_, err := s.connection.Add(docs, 0, nil)
 	if err != nil {
-		s.logger.Error("Error al agregar documento a Solr", zap.Error(err))
+		s.logger.Error("Error al agregar curso a Solr",
+			zap.String("course_id", course.ID.Hex()),
+			zap.Error(err))
 		return err
 	}
+
+	s.logger.Info("Curso agregado exitosamente a Solr",
+		zap.String("course_id", course.ID.Hex()))
 
 	// Commit los cambios
 	_, err = s.connection.Commit()
@@ -86,28 +125,51 @@ func (s *SolrClient) AddCourse(course *models.SearchCourseModel) error {
 }
 
 func (s *SolrClient) SearchCourses(query string) ([]models.SearchCourseModel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.connected {
+		return nil, fmt.Errorf("Conexión a Solr no establecida")
+	}
+
+	// Crear una nueva query de Solr
 	solrQuery := solr.NewQuery()
+
+	// Construir la query en base al parámetro recibido
 	if query != "" {
+		// Escapar caracteres especiales en la query
 		escapedQuery := strings.Replace(query, ":", "\\:", -1)
 		escapedQuery = strings.Replace(escapedQuery, " ", "\\ ", -1)
-		solrQuery.Q(fmt.Sprintf("course_name:*%s* OR description:*%s* OR category_name:*%s*", escapedQuery, escapedQuery, escapedQuery))
+
+		// Búsqueda en múltiples campos
+		solrQuery.Q(fmt.Sprintf("(course_name:*%s* OR description:*%s* OR category_name:*%s*)", escapedQuery, escapedQuery, escapedQuery))
 	} else {
+		// Si no se envía query, devolver todos los resultados
 		solrQuery.Q("*:*")
 	}
 
+	// Limitar el número de resultados
 	solrQuery.Rows(100)
 
-	s.logger.Info("Solr query", zap.String("query", solrQuery.String()))
+	// Log de la consulta que se ejecutará en Solr
+	s.logger.Info("[SEARCH-API] Ejecutando búsqueda en Solr",
+		zap.String("query", solrQuery.String()))
 
+	// Ejecutar la búsqueda
 	response := s.connection.Search(solrQuery)
 	res, err := response.Result(nil)
 	if err != nil {
-		s.logger.Error("Error al obtener resultados de Solr", zap.Error(err))
+		// Log de error en caso de fallo
+		s.logger.Error("[SEARCH-API] Error al ejecutar búsqueda en Solr",
+			zap.String("query", query),
+			zap.Error(err))
 		return nil, err
 	}
 
-	s.logger.Info("Solr response", zap.Any("response", res))
+	// Log de la respuesta recibida
+	s.logger.Debug("[SEARCH-API] Respuesta recibida de Solr",
+		zap.Int("total_resultados", len(res.Results.Docs)))
 
+	// Procesar los documentos obtenidos y convertirlos en el modelo de la aplicación
 	var courses []models.SearchCourseModel
 	if res != nil && res.Results != nil {
 		for _, doc := range res.Results.Docs {
@@ -115,12 +177,14 @@ func (s *SolrClient) SearchCourses(query string) ([]models.SearchCourseModel, er
 
 			course := models.SearchCourseModel{}
 
+			// Parsear ID del curso
 			if idStr, ok := doc["id"].(string); ok {
 				if oid, err := primitive.ObjectIDFromHex(idStr); err == nil {
 					course.ID = oid
 				}
 			}
 
+			// Asignar valores de los campos
 			course.CourseName = getStringValue(doc, "course_name")
 			course.CourseDescription = getStringValue(doc, "description")
 			course.CoursePrice = getFloat64Value(doc, "price")
@@ -130,6 +194,7 @@ func (s *SolrClient) SearchCourses(query string) ([]models.SearchCourseModel, er
 			course.CourseCapacity = getIntValue(doc, "capacity")
 			course.CourseImage = getStringValue(doc, "image")
 
+			// Parsear categoría del curso
 			if categoryIDStr := getStringValue(doc, "category_id"); categoryIDStr != "" {
 				if categoryID, err := primitive.ObjectIDFromHex(categoryIDStr); err == nil {
 					course.CategoryID = categoryID
@@ -139,10 +204,12 @@ func (s *SolrClient) SearchCourses(query string) ([]models.SearchCourseModel, er
 			course.CategoryName = getStringValue(doc, "category_name")
 			course.RatingAvg = getFloat64Value(doc, "ratingavg")
 
+			// Agregar el curso a la lista
 			courses = append(courses, course)
 		}
 	}
 
+	// Retornar los cursos encontrados
 	return courses, nil
 }
 
