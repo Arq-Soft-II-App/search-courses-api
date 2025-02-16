@@ -7,7 +7,7 @@ on:
 
 env: 
   REGISTRY: ghcr.io
-  IMAGE_NAME: arq-soft-ii-app/search-courses-api:${GITHUB_REF##*/}
+  IMAGE_NAME: arq-soft-ii-app/search-api:${GITHUB_REF##*/}
 
 jobs:
   publish:
